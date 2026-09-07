@@ -1,9 +1,12 @@
 ---
 name: lammps-polycrystal-tensile
-description: LAMMPS/Atomsk 单相多晶合金的完整建模→弛豫→单轴拉伸→应力应变数据导出闭环。当用户需要为 MD 模拟构建多晶/多相/多组元合金起始结构, 做能量最小化、NPT 弛豫、单轴拉伸力学测试, 或把拉伸应力应变数据导出成表格时使用。
+description: "LAMMPS/Atomsk 单相多晶合金完整建模→弛豫→单轴拉伸→数据导出闭环。Full closed-loop for single-phase polycrystal alloy: build → relax → uniaxial tensile → stress-strain CSV export via Atomsk + LAMMPS. 用于多晶/多相/多组元建模、最小化/NPT/单轴拉伸、或导出应力应变表格。English: polycrystal, multi-phase, multi-component modeling, energy minimization, NPT, tensile, or exporting stress-strain data."
 ---
 
 # LAMMPS 单相多晶建模 → 弛豫 → 拉伸 → 数据导出
+
+> **简体中文** | English README: [README.en.md](./README.en.md)
+> Scope: single-phase polycrystal tensile only. 有意共同开发 / co-development: 2518303901@qq.com
 
 ## Overview
 

@@ -1,5 +1,7 @@
 # lammps.skill
 
+> **简体中文** | [English](./README.en.md)
+
 > **当前适用范围:仅单相多晶拉伸。** 本 skill 会持续更新(后续将扩展到多相、更多体系)。**有意共同开发请联系 2518303901@qq.com。**
 
 **LAMMPS 单相多晶合金建模 → 弛豫 → 单轴拉伸 → 数据导出**的 Claude Code 技能。
@@ -81,4 +83,4 @@ lammps.skill/
 
 ## 授权
 
-私有仓库(MIT 待定)。详见 [SKILL.md](./SKILL.md)。
+MIT(待定)。详见 [SKILL.md](./SKILL.md)。
