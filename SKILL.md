@@ -16,9 +16,110 @@ description: LAMMPS/Atomsk 单相多晶合金的完整建模→弛豫→单轴�
 
 **闭环输出**:一份干净的 `stress_strain_eng.csv`(`step, strain, stress_MPa, T_K`),直接丢进 Origin/Python 画曲线、定屈服/UTS。
 
+---
+
+## §0 首次使用流程(First-use onboarding)
+
+**首次被调用时**按此流程走一遍;环境检测通过后写入用户记忆,后续调用直接跳过 §0.1–0.2,从 §0.3 的建模需求开始。
+
+### §0.1 环境检测(LAMMPS / Atomsk / MPI)
+
+先查 Claude Code 记忆里有没有 `lammps-env-checked` 标记:
+- **有** → 跳过本步骤,直接 §0.3。
+- **无** → 运行下面检测,如实报告结果。
+
+**检测命令(Git Bash / WSL / Linux,Claude 直接执行):**
+```bash
+bash scripts/check_env.sh
+```
+若无该脚本,用内联等价命令:
+```bash
+for t in atomsk lmp lmp_mpi mpirun; do
+  printf '%-8s: %s\n' "$t" "$(command -v "$t" 2>/dev/null || echo MISS)"; done
+```
+
+**检测项与缺失影响:**
+
+| 工具 | 用途 | 缺失影响 |
+|---|---|---|
+| `atomsk` | 建模(§1–§2) | 无法建多晶,**必装** |
+| `lmp` / `lmp_mpi` | 弛豫/拉伸(§6–§8) | 本地无 → 可远程集群跑 |
+| `mpirun` | 并行 | 本地无 → 集群跑 |
+
+**判定逻辑:**
+- **全有** → 本机跑整套流水线。
+- **有 atomsk、缺 lmp/mpirun** → **建模本机做,弛豫/拉伸在远程集群跑**(很常见:本机只装 Atomsk,计算在服务器)。向用户确认「LAMMPS 在哪台机器」,按其集群调整运行命令(§6/§7 的 `mpirun -np`、`run.slurm`)。
+- **缺 atomsk** → 提示安装:Windows 从 GitHub 下载 Atomsk 解压;Linux `sudo apt install atomsk` 或源码编译。
+
+**包依赖:** `eam/fs` 需 **MANYBODY** 包;`meam` 需 **MEAM** 包。在 LAMMPS 所在机器执行 `lmp -h | grep -iE 'meam|manybody'` 核对。
+
+### §0.2 记录记忆(检测成功后才写)
+
+检测**通过**(至少 atomsk 可用,LAMMPS 位置已明确本机或远程)后,在 Claude Code 自动记忆目录
+(`~/.claude/projects/<cwd>/memory/`,即 `MEMORY.md` 所在处)写 `lammps-env-checked.md`:
+
+```markdown
+---
+name: lammps-env-checked
+description: 本机 LAMMPS/Atomsk 环境检测结果(首次使用后写入,避免重复检测)
+metadata:
+  type: project
+---
+<日期> 检测: atomsk=<OK/MISS>, lammps=<OK/MISS>, mpirun=<OK/MISS>。
+<若缺 lammps> LAMMPS 在 <远程集群/机器>;建模本机做,弛豫/拉伸远程跑。
+```
+
+并在 `MEMORY.md` 加一行指针:`- [LAMMPS env checked](lammps-env-checked.md) — 环境检测结果`。
+失败(连 atomsk 都没有)不写,提示补装后再试。
+
+### §0.3 明确建模需求
+
+向用户**一次问清**,别反复问:
+1. **单相元素**:什么元素(Fe / Cu / 单元素)?晶格结构(fcc/bcc)+ 晶格常数 a(Å)。
+2. **体系大小**:盒尺寸 Lx×Ly×Lz(Å)+ 晶粒数 N(§1,典型 10–50)。
+   - 给了盒尺寸+晶粒数 → 直接落 `polycrystal.txt`(`box <Lx> <Ly> <Lz>` / `random <N>`)。
+   - 单元素走 §1;多组元配成分走 §3。
+3. **若是拉伸力学测试**,一并问清:`in.tensile` 的应变率 ε̇(§7 默认 1e9/s)、最大应变(默认 20%)、目标温度(默认 300K)。
+
+### §0.4 势函数:必须让用户提供
+
+确定体系后,**必须向用户索取势函数文件,不要自己假设或内置**。
+- 让用户给:**本地绝对路径**,或 **URL**(Claude 下载到工作目录并记录路径)。
+- 常见来源:NIST 交互势库(ctcms.nist.gov)、论文附件、作者主页。
+- 示例措辞:「请提供该体系的势函数文件(如 Fe-Ni-Cr 的 `Fe-Ni-Cr_fcc.eam.fs`)。本地路径或下载链接均可。」
+
+### §0.5 势函数合法性检查
+
+拿到势后,按序检查,全部通过才继续:
+
+1. **存在/可读/非空**:`ls -l <path>`;URL 先下载再查;`head <path>` 非空。
+2. **格式与 pair_style 匹配**:
+
+   | pair_style | 势文件格式 | 头部签名 |
+   |---|---|---|
+   | `eam/fs` | setfl | 第 4 行 `N  <el1> <el2> …`(N=元素数) |
+   | `eam/alloy` | `.eam.alloy` | 头部含元素数 |
+   | `meam` | 库文件 + 参数表 | 两文件,`pair_style meam` + `pair_coeff … library param` |
+
+   `head -5 <path>` 看签名是否与所选 pair_style 一致。
+3. **元素一致性**:提取势头 `N  <el1> <el2> …` 的元素符号,与 `pair_coeff * * <pot> <el1> <el2> …` 逐一比对;再与 data 文件 Masses 段的 type→element 映射(§3 手动加)比对。不一致 → 报错退回。
+   ```bash
+   awk 'NR==4{print; exit}' <potential>    # 例: 读 setfl 势头第 4 行元素
+   ```
+4. **最终判据 = `run 0` 快速验证**(§6.1 `in.quicktest`):
+   - ✓ 成功 → 势合法,进入建模/力学测试。
+   - 报 `Cannot open potential file` → 路径/下载问题。
+   - 报 `Unknown pair style` → 势格式与 pair_style 不符。
+   - 报 `element … not in potential` / mass 不匹配 → 元素/序号不符。
+   让用户换势,或修正 pair_coeff / Masses 后重查。
+
+> **不要替用户决定势的来源或默认填一个**;§0.4 强制索取,§0.5 校验通过才动方程。
+
+---
+
 ## When to Use
 
-- 用户说: 建模 / 建多晶 / 多相 / atomsk / lammps data / 多晶模型
+- 用户说: 建模 / 建多晶 / 多相 / atomsk / lammps data / 多晶模型(首次调用先走 §0 环境检测+需求确认)
 - 用户说: 弛豫 / 最小化 / minimize / NPT / 单轴拉伸 / tensile / 应力应变 / 力学性能 / 拉伸曲线
 - 造 fcc/bcc 多晶起始结构,或在其上做单轴拉伸力学测试
 - 多组元合金(Fe-Ni-Cr、Cantor CoCrFeMnNi、+TiC)成分替换
