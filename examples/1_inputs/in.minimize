@@ -1,0 +1,41 @@
+# ==============================================================================
+# LAMMPS: Fe-Ni-Cr 多晶 — 能量最小化
+# 体系:   Fe-Ni-Cr fcc 多晶, 20 grains, 328,905 atoms
+# 势函数: Mendelev 2019 Fe-Ni-Cr fcc EAM/FS
+# 输出:   data.minimized
+# ==============================================================================
+
+# ---- 初始化 ------------------------------------------------
+units           metal
+boundary        p p p
+atom_style      atomic
+
+# ---- 读取多晶结构 -------------------------------------------
+read_data       Fe-Ni-Cr.data
+
+# ---- 势函数: Mendelev 2019 Fe-Ni-Cr fcc (eam/fs) -----------
+# 元素: 势文件 = Fe Ni Cr | data file type 1=Fe, 2=Ni, 3=Cr ✓ 一致
+# 引用: M.I. Mendelev, unpublished (2019), Ames Laboratory
+pair_style      eam/fs
+pair_coeff      * * Fe-Ni-Cr_fcc.eam.fs Fe Ni Cr
+
+# ---- 近邻列表 ------------------------------------------------
+neighbor        2.0 bin
+neigh_modify    every 1 delay 0 check yes
+
+# ---- 输出设置 ------------------------------------------------
+thermo          100
+thermo_style    custom step temp pe etotal press vol lx ly lz density
+
+# ---- 能量最小化 ----------------------------------------------
+# 注: 去掉 box/relax（MEAM 应力计算对 32 万原子太慢）
+#     盒子尺寸留给 in.relax 的 NPT 弛豫去调整
+# 容差放宽到 1e-6（之后还有 NPT 弛豫，不需要极致精度）
+minimize        1.0e-6 1.0e-6 10000 100000
+
+# ---- 写入结果 ------------------------------------------------
+write_data      data.minimized
+
+print           "============================================"
+print           "能量最小化完成 → data.minimized"
+print           "============================================"

@@ -1,0 +1,85 @@
+# ==============================================================================
+# LAMMPS: Fe-Ni-Cr 多晶 — 单轴拉伸 (x 方向)
+# 输入:   data.relaxed (由 in.relax 生成)
+# 输出:   stress_strain.txt + dump.tensile.*.lammpstrj
+# 条件:   T=300K, ε̇=1×10⁹ s⁻¹, εₘₐₓ=20%
+# ==============================================================================
+
+# ---- 变量 ------------------------------------------------
+variable        temp        equal 300.0
+variable        strain_rate equal 1.0e9
+# deform 的 erate 是 per-ps, 而 strain_rate 是 per-s; 换算: 1e9/s = 1e-3/ps
+variable        deform_erate equal ${strain_rate}*1.0e-12
+variable        max_strain  equal 0.20
+variable        dt          equal 0.001
+variable        tdamp       equal 0.1
+variable        pdamp       equal 1.0
+variable        total_steps equal floor(${max_strain} / (${strain_rate} * ${dt} * 1.0e-12))
+
+# ---- 初始化 ------------------------------------------------
+units           metal
+boundary        p p p
+atom_style      atomic
+
+# ---- 读取弛豫后结构 -----------------------------------------
+read_data       data.relaxed
+
+# ---- 势函数: Mendelev 2019 Fe-Ni-Cr fcc (eam/fs) -----------
+pair_style      eam/fs
+pair_coeff      * * Fe-Ni-Cr_fcc.eam.fs Fe Ni Cr
+
+# ---- 近邻列表 ------------------------------------------------
+neighbor        2.0 bin
+neigh_modify    every 1 delay 0 check yes
+
+# ---- 热力学输出 ----------------------------------------------
+thermo          500
+thermo_modify   flush yes
+thermo_style    custom step temp pe ke etotal press pxx pyy pzz lx ly lz vol density
+
+# ---- 应力-应变实时输出 ---------------------------------------
+# 列: step temp pxx pyy pzz lx ly lz
+fix             stress_out all print 500 &
+                "$(step) $(temp) $(pxx) $(pyy) $(pzz) $(lx) $(ly) $(lz)" &
+                file stress_strain.txt screen no title &
+                "# step temp pxx pyy pzz lx ly lz"
+
+# ---- 轨迹 dump (每 2000 步保存) ------------------------------
+dump            def all custom 2000 dump.tensile.*.lammpstrj id type x y z
+
+# ==============================================================
+# 阶段 1: NPT 预平衡 (确保拉伸前系统稳定)
+# ==============================================================
+reset_timestep  0
+timestep        ${dt}
+fix             npt_eq all npt temp ${temp} ${temp} ${tdamp} aniso 0.0 0.0 1.0
+run             20000                       # 20 ps
+unfix           npt_eq
+print           "预平衡完成，开始拉伸..."
+
+# ==============================================================
+# 阶段 2: 单轴拉伸 (x 方向变形, y/z 维持零压)
+# ==============================================================
+reset_timestep  0
+
+# x 方向: 恒定工程应变率拉伸
+fix             deform_x all deform 1 x erate ${deform_erate} units box remap x
+
+# y, z 方向: NPT 控温 + 控压 = 0 (允许泊松收缩)
+fix             npt_yz all npt temp ${temp} ${temp} ${tdamp} y 0.0 0.0 ${pdamp} z 0.0 0.0 ${pdamp} drag 0.2
+
+run             ${total_steps}
+
+# ---- 清理 ------------------------------------------------
+unfix           deform_x
+unfix           npt_yz
+unfix           stress_out
+undump          def
+
+write_data      data.tensiled
+
+print           "============================================"
+print           "拉伸完成"
+print           "总步数: ${total_steps}"
+print           "应力-应变数据 → stress_strain.txt"
+print           "============================================"

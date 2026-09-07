@@ -1,0 +1,19 @@
+# 快速验证 EAM/FS 势能否对 328k 原子算力
+units           metal
+boundary        p p p
+atom_style      atomic
+
+read_data       Fe-Ni-Cr.data
+
+pair_style      eam/fs
+pair_coeff      * * Fe-Ni-Cr_fcc.eam.fs Fe Ni Cr
+
+neighbor        2.0 bin
+neigh_modify    every 1 delay 0 check yes
+
+thermo          1
+thermo_style    custom step pe cpu
+
+# 只算一步力，不积分
+run             0
+print           "SUCCESS: EAM/FS force calculation works"

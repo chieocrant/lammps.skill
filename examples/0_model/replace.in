@@ -1,0 +1,10 @@
+# 多晶合金建模，作者：小马老师，公众号：lammps加油站
+units           metal
+boundary        p p p
+atom_style      atomic
+timestep        0.001
+neighbor        0.2 bin
+read_data       final.lmp
+set             type 1 type/ratio 2 0.33 8793
+set             type 1 type/ratio 3 0.50 56332
+write_data      Fe-Ni-Cr.data

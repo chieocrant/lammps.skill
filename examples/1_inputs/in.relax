@@ -1,0 +1,87 @@
+# ==============================================================================
+# LAMMPS: Fe-Ni-Cr 多晶 — NPT 弛豫 (300K)
+# 输入:   data.minimized (由 in.minimize 生成)
+# 输出:   data.relaxed + dump.relax.*.lammpstrj
+# 流程:   升温 300→800K → 高温弛豫 → 冷却 800→300K → 室温平衡
+# ==============================================================================
+
+# ---- 变量 ------------------------------------------------
+variable        temp_init   equal 300.0
+variable        temp_high   equal 800.0
+variable        temp_final  equal 300.0
+variable        press       equal 0.0
+variable        dt          equal 0.001
+variable        tdamp       equal 0.1
+variable        pdamp       equal 1.0
+
+# ---- 初始化 ------------------------------------------------
+units           metal
+boundary        p p p
+atom_style      atomic
+
+# ---- 读取最小化结构 -----------------------------------------
+read_data       data.minimized
+
+# ---- 势函数: Mendelev 2019 Fe-Ni-Cr fcc (eam/fs) -----------
+pair_style      eam/fs
+pair_coeff      * * Fe-Ni-Cr_fcc.eam.fs Fe Ni Cr
+
+# ---- 近邻列表 ------------------------------------------------
+neighbor        2.0 bin
+neigh_modify    every 1 delay 0 check yes
+
+# ---- 速度初始化 ----------------------------------------------
+velocity        all create ${temp_init} 4928459 rot yes mom yes
+
+# ---- 热力学输出 ----------------------------------------------
+thermo          100
+thermo_style    custom step temp pe ke etotal press vol cpu
+
+# ---- 轨迹 dump ----------------------------------------------
+dump            traj all custom 5000 dump.relax.*.lammpstrj id type x y z
+
+# ==============================================================
+# 阶段 1: NVT 升温 300 → 800K
+# ==============================================================
+reset_timestep  0
+timestep        ${dt}
+fix             heat all nvt temp ${temp_init} ${temp_high} ${tdamp}
+run             50000                       # 50 ps
+unfix           heat
+print           "阶段1/4: 升温 300→800K 完成"
+
+# ==============================================================
+# 阶段 2: NPT 高温弛豫 @ 800K
+# ==============================================================
+fix             npt_high all npt temp ${temp_high} ${temp_high} ${tdamp} &
+                iso ${press} ${press} ${pdamp}
+run             100000                      # 100 ps
+unfix           npt_high
+write_data      data.highT
+print           "阶段2/4: 高温弛豫 800K 完成"
+
+# ==============================================================
+# 阶段 3: NPT 冷却 800 → 300K
+# ==============================================================
+fix             cool all npt temp ${temp_high} ${temp_final} ${tdamp} &
+                iso ${press} ${press} ${pdamp}
+run             100000                      # 100 ps
+unfix           cool
+write_data      data.cooled
+print           "阶段3/4: 冷却 800→300K 完成"
+
+# ==============================================================
+# 阶段 4: NPT 室温平衡 @ 300K
+# ==============================================================
+fix             npt_eq all npt temp ${temp_final} ${temp_final} ${tdamp} &
+                iso ${press} ${press} ${pdamp}
+run             100000                      # 100 ps
+unfix           npt_eq
+undump          traj
+
+# ---- 写入最终结构 -------------------------------------------
+write_data      data.relaxed
+
+print           "============================================"
+print           "NPT 弛豫完成 → data.relaxed"
+print           "============================================"
