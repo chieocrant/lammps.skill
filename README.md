@@ -2,85 +2,86 @@
 
 > **简体中文** | [English](./README.en.md)
 
-> **当前适用范围:仅单相多晶拉伸。** 本 skill 会持续更新(后续将扩展到多相、更多体系)。**有意共同开发请联系 2518303901@qq.com。**
+> **当前适用范围：仅单相多晶拉伸。** 本 skill 会持续更新（后续将扩展到多相、更多体系）。**有意共同开发请联系 2518303901@qq.com。**
 
 **LAMMPS 单相多晶合金建模 → 弛豫 → 单轴拉伸 → 数据导出**的 Claude Code 技能。
 
-一份可从**模型**一路跑到**应力应变表格**的完整可复现流水线。核心是给 Claude 一套可直接复用的流程:**Atomsk 建多晶 + LAMMPS 原子替换配成分 + NPT 弛豫 + 单轴拉伸 + 数据导出成表**(Origin/Python 直接分析)。
+**核心规范：AI 只负责建模，其余只生成脚本，由你运行。** 对任意体系，AI 运行 `atomsk` 建模产出 `data` 文件，然后把 **minimize + NPT 弛豫 + 单轴拉伸合并进一个输入文件**，连同测试/正式脚本，打包成一份干净的运行包（`0/1/2/3` + `README`）。**总输出只允许这 4 个目录 + 一个 README。** 用户只需放好势函数与 data，然后按 README 先跑测试脚本、通过后再跑正式脚本。
+
+## 输出规范（Output Contract）
+
+AI 对每个体系只产出一个包 `run_<system>/`：
+
+```
+run_<system>/
+├── README.md     # 中英双语; 只写用户操作(测试/正式命令 + 期待返回)
+├── 0/            # 势函数 + AI 建模产物 system.data
+├── 1/            # 测试脚本 run_test.sh   (缩短步数验证整体可跑)
+├── 2/            # 正式脚本 run_main.sh + 单文件 in.run(minimize+relax+tensile)
+└── 3/            # 日志/产出(运行时写入)
+```
+
+- **AI 不在任何 AI 载体上运行 LAMMPS**；只跑建模（本机 atomsk，秒级），minimize/弛豫/拉伸一律写成脚本交给用户。
+- 大文件（`*.data`、`*.eam.fs`、`final.lmp`）不入 git；`0/`、`3/` 用 `.gitkeep` 占位。
 
 ## 覆盖的完整流程
 
-```
-Atomsk 建多晶 → set type/ratio 配成分 → 势函数(eam/fs / meam)
-    → quicktest 验势 → minimize 最小化 → NPT 弛豫(4 段)
-    → 单轴拉伸(x, ε̇=1e9/s, 20%) → 应力应变表 CSV
-```
-
 | 阶段 | 方法 / 脚本 | 说明 |
 |---|---|---|
-| **首次使用引导** | `scripts/check_env.sh` + §0 | 检测 LAMMPS/Atomsk 环境 → 记入用户记忆 → 明确元素+体系大小 → 索取势函数 → 校验势合法性 |
-| 单相多晶(单元素) | Voronoi 直接 `atomsk --polycrystal` | §1 |
-| 多相复合(fcc+bcc、基体+析出相) | Delete-Merge | §2 |
-| 多组元合金(3+ 元素) | 原子替换 `set type/ratio` | §3 |
-| 势函数 | `eam/fs`(Fe-Ni-Cr)、`meam`(Cantor) | §4 |
-| 弛豫 | `in.quicktest`→`in.minimize`→`in.relax` | §6 |
-| 单轴拉伸 | `in.tensile`(含 4 个已修复雷区) | §7 |
-| 数据导出 | `extract_stress_strain.py` → CSV | §8 |
+| **建模** | `atomsk --polycrystal` / `set type/ratio` / delete-merge | AI 生成 `0/system.data`（§1–§5） |
+| **单文件流水线** | `2/in.run`（minimize + 4 段 NPT + 单轴拉伸，一个文件） | §6.1 |
+| **测试** | `1/run_test.sh`（缩短步数验证整体可跑） | §6.2 |
+| **正式** | `2/run_main.sh`（全步数 + 导出 CSV） | §6.2 |
+| **数据导出** | 内联 `awk` / `extract_stress_strain.py` → `stress_strain_eng.csv` | §7 |
 
-## 已验证案例(100% 跑通)
+## 权威模板包（已验证 100% 跑通）
 
-- **Fe-Ni-Cr 三元合金 + 单轴拉伸**(2026-09-05):20 grains / 328,905 原子 / eam/fs。快速验势✓、最小化✓(8.7s@128核)、弛豫✓(盒 199.2×99.6×199.2)、拉伸✓(20% 应变)。结果:**0.2% 偏移屈服 ≈275 MPa @0.25%**,**UTS ≈4030 MPa @8.9%**。完整复现命令见 [SKILL.md](./SKILL.md)。
-- **Cu-W 双相多晶**(6 晶粒,589,168 原子,delete-merge)。
-- **Fe-Ni-Cr 三元建模**(20 晶粒,328,905 原子)。
+[`examples/run_FeNiCr/`](./examples/run_FeNiCr/README.md) 是技能生成任意体系时照搬的范本，含完整 `0/1/2/3` + 双语 README：
 
-## 首次使用自动引导(§0)
+```
+examples/run_FeNiCr/
+├── README.md               # 用户手册: 测试/正式命令 + 期待返回
+├── 0/.gitkeep              # 放入 势函数 + system.data
+├── 1/run_test.sh           # 缩短步数测试
+├── 2/in.run + run_main.sh  # 单文件流水线 + 正式脚本
+└── 3/.gitkeep              # 运行时写日志/产出
+```
 
-首次被调用时,skill 会流程化处理,无需用户熟悉内部细节:
+- **已验证结果**：Fe-Ni-Cr fcc，20 grains，~328,905 原子，eam/fs。0.2% 屈服 ≈275 MPa @0.25%，UTS ≈4030 MPa @8.9%。用户按 README 复现：`bash 1/run_test.sh` → `bash 2/run_main.sh`。
 
-1. **环境检测** — 运行 `scripts/check_env.sh`,判断本机 `atomsk` / `lmp` / `mpirun` 是否可用(识别「建模本机做、弛豫/拉伸集群跑」的拆分)。
-2. **写入记忆** — 检测通过后记入用户 Claude Code 记忆(下次跳过,不重复检测)。
-3. **需求确认** — 澄清单相**元素**、晶格常数、盒尺寸、晶粒数(及是否拉伸测试)。
-4. **强制索取势函数** — 要求用户提供势文件路径/下载地址,不自行假设。
-5. **校验势** — 检查存在/格式(`eam/fs` setfl 头、`meam` 库)/元素一致性,并用 `run 0` 快速验证。
+## 使用方法
 
-## 用法
-
-本仓库是一份 Claude Code **skill**。将 `SKILL.md` 放入某个 Claude Code 技能目录(如 `~/.claude/skills/lammps-modeling/`)即可被 Claude 调用。
+本仓库是一份 Claude Code **skill**。把 `SKILL.md` 放进某个 Claude Code 技能目录（如 `~/.claude/skills/lammps-modeling/`）：
 
 ```bash
-# 把本仓库作为 skill 使用(本机已有本地副本)
 cp SKILL.md ~/.claude/skills/lammps-modeling/
-# 或克隆到本地技能目录
+# 或克隆整个仓库(把 examples/, scripts/ 一起带上)
 git clone https://github.com/chieocrant/lammps.skill.git \
   ~/.claude/skills/lammps-modeling/
 ```
-
-克隆时把 `examples/`、`scripts/` 一起带上(它们被 SKILL.md 引用)。
 
 ## 目录结构
 
 ```
 lammps.skill/
-├── SKILL.md                    # 完整闭环(frontmatter + §1–§8)
-├── README.md
+├── SKILL.md                        # 输出规范 + 建模线 + 力学测试线条文
+├── README.md / README.en.md
 ├── scripts/
-│   └── extract_stress_strain.py   # 拉伸数据 → 表格 CSV(Origin 用)
+│   ├── extract_stress_strain.py    # 拉伸数据→CSV(参考实现)
+│   └── check_env.sh                # 环境检测(用户可选运行)
 └── examples/
-    ├── 0_model/                   # 建模:元胞 / 节点 / 替换
-    │   ├── Fe.xsf  polycrystal.txt  replace.in
-    └── 1_inputs/                  # 弛豫 + 拉伸输入脚本
-        ├── in.quicktest  in.minimize  in.relax  in.tensile  run.slurm
+    ├── run_FeNiCr/                 # ★ 权威模板包(0/1/2/3 + 双语 README)
+    ├── 0_model/                    # 建模参考(旧)
+    └── 1_inputs/                   # 旧分段输入参考(旧)
 ```
-
-注意:大文件(Fe-Ni-Cr.data 24M、final.lmp 26M、eam.fs 4.4M)不入库,需按 SKILL.md 生成或下载。
 
 ## 依赖
 
-- **Atomsk**:`atomsk`(Windows 绝对路径示例 `/d/atomsk_b0.13.1_Windows/Atomsk/atomsk`)
-- **LAMMPS** `lmp`/`lmp_mpi` + MPI(`mpirun`),开启 `meam`/`manybody` 包
-- **Python** + `numpy`(仅脚本可选);兼容 Git Bash / WSL / Linux
-- EAM/MEAM 实空间势,**无需 kspace/FFT**
+- **Atomsk**：`atomsk`（Windows 示例 `/d/atomsk_b0.13.1_Windows/Atomsk/atomsk`）—— 建模用。
+- **LAMMPS**：`lmp`/`lmp_mpi` + MPI（`mpirun`），开启 `meam`/`manybody` 包 —— 仅服务器运行。
+- **awk / Python**：仅脚本导出 CSV；兼容 Git Bash / WSL / Linux。
+- EAM/MEAM 实空间势，**无需 kspace/FFT**。
 
 ## 授权
 
-MIT(待定)。详见 [SKILL.md](./SKILL.md)。
+MIT（待定）。详见 [SKILL.md](./SKILL.md)。

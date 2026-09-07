@@ -1,0 +1,156 @@
+# ==============================================================================
+# LAMMPS 单文件流水线: minimize → NPT 弛豫(4段) → 单轴拉伸 → 应力应变导出
+# 体系:   Fe-Ni-Cr fcc 多晶, 20 grains, ~328,905 atoms (默认值; 可用 -var 覆盖)
+# 势函数: Mendelev 2019 Fe-Ni-Cr fcc EAM/FS
+#
+# 工作目录约定: 从 3/ 目录运行 (脚本 run_test.sh / run_main.sh 已 cd 到 3/)。
+#   - 输入读 ../0/  (system.data + 势文件)
+#   - 全部产出写 3/  (data.*、stress_strain.txt、log)
+# 直接手动运行时请 cd 到 3/, 用:
+#   mpirun -np 16  lmp_mpi -in ../2/in.run -var n_heat 200 ...   # 测试(缩短)
+#   mpirun -np 128 lmp_mpi -in ../2/in.run                        # 正式(全步数)
+#
+# 已修复的 4 个 in.tensile 雷区 (见 SKILL.md §7, 勿改回):
+#   ① deform erate 单位 per-s -> per-ps,  ×1.0e-12
+#   ② npt ... aniso 0.0 0.0 0.0  的 Pdamp=0 非法 -> 用 ${pdamp}
+#   ③ npt aniso + deform x 冲突 (multiple fixes box x) -> 只控 y/z, x 让给 deform
+#   ④ 后台重定向输出实时 -> thermo_modify flush yes
+# ==============================================================================
+
+# ---- 体系/势 (相对 3/ 的路径; 手动改或 -var 覆盖) --------------------------
+variable       data_file   default ../0/system.data
+variable       pot_file    default ../0/Fe-Ni-Cr_fcc.eam.fs
+variable       pair_style  default eam/fs
+variable       elements    default "Fe Ni Cr"
+
+# ---- 温度/压力/时间 ----------------------------------------------------------
+variable       temp_init   default 300.0
+variable       temp_high   default 800.0
+variable       temp_final  default 300.0
+variable       press       default 0.0
+variable       dt          default 0.001
+variable       tdamp       default 0.1
+variable       pdamp       default 1.0
+
+# ---- 各阶段步数 (测试/正式通过 -var 覆盖) ------------------------------------
+variable       n_heat      default 50000    # 升温 300->800K
+variable       n_highT     default 100000   # 高温弛豫 800K
+variable       n_cool      default 100000   # 冷却 800->300K
+variable       n_eq        default 100000   # 室温平衡 300K
+variable       n_pre       default 20000    # 拉伸前 NPT 预平衡
+
+# ---- 拉伸参数 ------------------------------------------------------------------
+variable       strain_rate default 1.0e9
+variable       max_strain  default 0.20
+variable       deform_erate equal ${strain_rate}*1.0e-12                 # ① per-s -> per-ps
+variable       total_steps equal floor(${max_strain}/(${strain_rate}*${dt}*1.0e-12))
+
+# ---- 初始化 --------------------------------------------------------------------
+units           metal
+boundary        p p p
+atom_style      atomic
+
+read_data       ${data_file}
+
+# ---- 势函数 ------------------------------------------------------------------
+pair_style      ${pair_style}
+pair_coeff      * * ${pot_file} ${elements}
+
+# ---- 近邻列表 ------------------------------------------------------------------
+neighbor        2.0 bin
+neigh_modify    every 1 delay 0 check yes
+
+# ---- 热力学输出 ------------------------------------------------------------------
+thermo          100
+thermo_style    custom step temp pe ke etotal press vol lx ly lz density
+
+# ==============================================================================
+# 段 1: 能量最小化
+# ==============================================================================
+print           "== [1/3] minimize =="
+minimize        1.0e-6 1.0e-6 10000 100000
+write_data      data.minimized
+
+# ==============================================================================
+# 段 2: NPT 弛豫 (4 段: 升温 -> 高温弛豫 -> 冷却 -> 室温平衡)
+# ==============================================================================
+print           "== [2/3] NPT relax (4 stages) =="
+velocity        all create ${temp_init} 4928459 rot yes mom yes
+
+reset_timestep  0
+timestep        ${dt}
+
+# 2.1 升温 300 -> 800K (NVT)
+fix             heat all nvt temp ${temp_init} ${temp_high} ${tdamp}
+run             ${n_heat}
+unfix           heat
+
+# 2.2 高温弛豫 @800K (NPT iso)
+fix             npt_high all npt temp ${temp_high} ${temp_high} ${tdamp} &
+                iso ${press} ${press} ${pdamp}
+run             ${n_highT}
+unfix           npt_high
+write_data      data.highT
+
+# 2.3 冷却 800 -> 300K (NPT iso)
+fix             cool all npt temp ${temp_high} ${temp_final} ${tdamp} &
+                iso ${press} ${press} ${pdamp}
+run             ${n_cool}
+unfix           cool
+write_data      data.cooled
+
+# 2.4 室温平衡 @300K (NPT iso)
+fix             npt_eq all npt temp ${temp_final} ${temp_final} ${tdamp} &
+                iso ${press} ${press} ${pdamp}
+run             ${n_eq}
+unfix           npt_eq
+write_data      data.relaxed
+
+# ==============================================================================
+# 段 3: 单轴拉伸 (x 恒应变率, y/z 伯松收缩)
+# ==============================================================================
+print           "== [3/3] uniaxial tensile =="
+
+# 3.1 NPT 预平衡 (确保拉伸前稳定) -> 拉伸前盒子尺寸 = L0
+reset_timestep  0
+fix             npt_pre all npt temp ${temp_final} ${temp_final} ${tdamp} &
+                aniso ${press} ${press} ${pdamp}
+run             ${n_pre}
+unfix           npt_pre
+
+# 3.2 拉伸: x 恒应变率 + y/z 零压 (④ 实时输出)
+reset_timestep  0
+thermo          500
+thermo_modify   flush yes
+thermo_style    custom step temp pe ke etotal press pxx pyy pzz lx ly lz vol density
+
+# 应力-应变实时输出: step temp pxx pyy pzz lx ly lz
+fix             stress_out all print 500 &
+                "$(step) $(temp) $(pxx) $(pyy) $(pzz) $(lx) $(ly) $(lz)" &
+                file stress_strain.txt screen no title &
+                "# step temp pxx pyy pzz lx ly lz"
+
+# 轨迹 dump (每 2000 步; 用 OVITO 看拉伸变形)
+dump            def all custom 2000 dump.tensile.*.lammpstrj id type x y z
+
+# x 方向恒定工程应变率 (①)
+fix             deform_x all deform 1 x erate ${deform_erate} units box remap x
+# y/z 零压, 允许泊松收缩; x 让给 deform (③); Pdamp=${pdamp} (②)
+fix             npt_yz all npt temp ${temp_final} ${temp_final} ${tdamp} &
+                y ${press} ${press} ${pdamp} z ${press} ${press} ${pdamp} drag 0.2
+
+run             ${total_steps}
+
+# ---- 清理 --------------------------------------------------------------------
+unfix           deform_x
+unfix           npt_yz
+unfix           stress_out
+undump          def
+
+write_data      data.tensiled
+
+print           "============================================================"
+print           "PIPELINE_DONE"
+print           "总步数: ${total_steps}   strain_rate=${strain_rate} max_strain=${max_strain}"
+print           "应力-应变数据 -> stress_strain.txt"
+print           "============================================================"

@@ -1,0 +1,4 @@
+# 0/: 势函数 + 建模 data (大文件不入 git, 运行前放入)
+#   - Fe-Ni-Cr_fcc.eam.fs   (势函数)
+#   - system.data           (AI 建模产物)
+#   详见 ../README.md 第 0 步

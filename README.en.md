@@ -1,84 +1,86 @@
 # lammps.skill
 
-> **Current scope: single-phase polycrystal tensile only.** This skill will keep being updated (multi-phase and more systems to come). **Interested in co-development? Contact 2518303901@qq.com.**
+> **English** | [简体中文](./README.md)
+
+> **Current scope: single-phase polycrystal tensile only.** Still evolving (multi-phase and more systems to come). **Interested in co-development? Contact 2518303901@qq.com.**
 
 A Claude Code skill for **LAMMPS single-phase polycrystal alloy modeling → relaxation → uniaxial tensile → data export**.
 
-A complete, reproducible pipeline that runs all the way from a **model** to a **stress–strain table**. The core is a reusable workflow for Claude: **Atomsk builds the polycrystal + LAMMPS atom-replacement for composition + NPT relaxation + uniaxial tensile + CSV export** (analyze directly in Origin / Python).
+**Core rule: the AI only does the modeling; everything else is emitted as scripts for you to run.** For any system, the AI runs `atomsk` to build the `data` file, then merges **minimize + NPT relaxation + uniaxial tensile into ONE input file**, wraps it with test/main scripts, and packages it into a clean run-package (`0/1/2/3` + `README`). **The final output is allowed to be exactly these 4 directories + one README — nothing else.**
 
-## Full Pipeline Covered
+## Output Contract
+
+For each system the AI emits one package `run_<system>/`:
 
 ```
-Atomsk build polycrystal → set type/ratio composition → potential (eam/fs / meam)
-    → quicktest (validate potential) → minimize → NPT relaxation (4 stages)
-    → uniaxial tensile (x, ε̇=1e9/s, 20%) → stress–strain CSV
+run_<system>/
+├── README.md     # bilingual; user steps only (test/main command + expected result)
+├── 0/            # potential + AI-built system.data
+├── 1/            # test script run_test.sh     (shortened run, validates the whole pipeline)
+├── 2/            # main script run_main.sh + single-file in.run (minimize+relax+tensile)
+└── 3/            # logs/output (written at runtime)
 ```
 
-| Stage | Method / Script | Section |
+- **The AI never runs LAMMPS on any AI host**; it only does the modeling (local `atomsk`, seconds), and writes minimize/relax/tensile as scripts for you to run.
+- Large files (`*.data`, `*.eam.fs`, `final.lmp`) are not committed; `0/` and `3/` use `.gitkeep` placeholders.
+
+## Pipeline Covered
+
+| Stage | Method / Script | Notes |
 |---|---|---|
-| **First-use onboarding** | `scripts/check_env.sh` + §0 | Detect LAMMPS/Atomsk env → cache to user memory → clarify element + system size → request potential → validate potential |
-| Single-phase polycrystal (single element) | Voronoi direct `atomsk --polycrystal` | §1 |
-| Multi-phase composite (fcc+bcc, matrix+precipitate) | Delete-merge | §2 |
-| Multi-component alloy (3+ elements) | Atom replacement `set type/ratio` | §3 |
-| Potential | `eam/fs` (Fe-Ni-Cr), `meam` (Cantor) | §4 |
-| Relaxation | `in.quicktest` → `in.minimize` → `in.relax` | §6 |
-| Uniaxial tensile | `in.tensile` (incl. 4 fixed landmines) | §7 |
-| Data export | `extract_stress_strain.py` → CSV | §8 |
+| **Modeling** | `atomsk --polycrystal` / `set type/ratio` / delete-merge | AI generates `0/system.data` (§1–§5) |
+| **Single-file pipeline** | `2/in.run` (minimize + 4-stage NPT + tensile, one file) | §6.1 |
+| **Test** | `1/run_test.sh` (shortened steps; validates whole pipeline) | §6.2 |
+| **Main** | `2/run_main.sh` (full steps + CSV export) | §6.2 |
+| **Data export** | inline `awk` / `extract_stress_strain.py` → `stress_strain_eng.csv` | §7 |
 
-## Verified Case (100% run through)
+## Authoritative Template (verified 100%)
 
-- **Fe-Ni-Cr ternary alloy + uniaxial tensile** (2026-09-05): 20 grains / 328,905 atoms / eam/fs. Quicktest ✓, minimize ✓ (8.7 s @ 128 cores), relax ✓ (box 199.2×99.6×199.2), tensile ✓ (20% strain). Results: **0.2% offset yield ≈275 MPa @0.25%**, **UTS ≈4030 MPa @8.9%**. Full reproduction commands in [SKILL.md](./SKILL.md).
-- **Cu-W dual-phase polycrystal** (6 grains, 589,168 atoms, delete-merge).
-- **Fe-Ni-Cr ternary modeling** (20 grains, 328,905 atoms).
+[`examples/run_FeNiCr/`](./examples/run_FeNiCr/README.md) is the exemplar the skill follows when generating any system. It ships the full `0/1/2/3` + bilingual README:
 
-## First-use Onboarding (§0)
+```
+examples/run_FeNiCr/
+├── README.md               # user manual: test/main command + expected result
+├── 0/.gitkeep              # drop in potential + system.data
+├── 1/run_test.sh           # shortened-run test
+├── 2/in.run + run_main.sh  # single-file pipeline + main script
+└── 3/.gitkeep              # logs/output at runtime
+```
 
-On first invocation the skill guides you through a flow — no need to know the internals:
-
-1. **Environment check** — run `scripts/check_env.sh` to see if `atomsk` / `lmp` / `mpirun` are available, and recognize the "build locally, relax/tensile on a cluster" split.
-2. **Cache to memory** — once the check passes, save the result to your Claude Code memory (skipped on subsequent runs).
-3. **Requirement elicitation** — clarify single-phase **element**, lattice constant, box size, grain count (and whether tensile testing).
-4. **Require the potential** — ask you to provide the potential file path/download URL; never assume one.
-5. **Validate the potential** — check existence / format (`eam/fs` setfl header, `meam` library) / element consistency, then quick-verify with `run 0`.
+- **Verified result**: Fe-Ni-Cr fcc, 20 grains, ~328,905 atoms, eam/fs. 0.2% yield ≈275 MPa @0.25%, UTS ≈4030 MPa @8.9%. Reproduce: `bash 1/run_test.sh` → `bash 2/run_main.sh`.
 
 ## Usage
 
-This repo is a Claude Code **skill**. Put `SKILL.md` into a Claude Code skill directory (e.g. `~/.claude/skills/lammps-modeling/`) to make it callable by Claude.
+This repo is a Claude Code **skill**. Put `SKILL.md` into a Claude Code skill directory (e.g. `~/.claude/skills/lammps-modeling/`):
 
 ```bash
-# Use this repo as a skill (you already have a local copy)
 cp SKILL.md ~/.claude/skills/lammps-modeling/
-# Or clone into a local skill directory
+# or clone the whole repo (bring examples/, scripts/ along)
 git clone https://github.com/chieocrant/lammps.skill.git \
   ~/.claude/skills/lammps-modeling/
 ```
-
-When cloning, also bring `examples/` and `scripts/` (referenced by SKILL.md).
 
 ## Directory Structure
 
 ```
 lammps.skill/
-├── SKILL.md                    # full closed loop (frontmatter + §1–§8)
-├── README.md                   # Chinese
-├── README.en.md                # English (this file)
+├── SKILL.md                        # output contract + modeling + mechanics notes
+├── README.md / README.en.md
 ├── scripts/
-│   └── extract_stress_strain.py   # tensile data → CSV table (for Origin)
+│   ├── extract_stress_strain.py    # tensile data → CSV (reference impl.)
+│   └── check_env.sh                # environment check (optional, run by user)
 └── examples/
-    ├── 0_model/                   # modeling: unit cell / nodes / replacement
-    │   ├── Fe.xsf  polycrystal.txt  replace.in
-    └── 1_inputs/                  # relaxation + tensile input scripts
-        ├── in.quicktest  in.minimize  in.relax  in.tensile  run.slurm
+    ├── run_FeNiCr/                 # ★ authoritative template package (0/1/2/3 + README)
+    ├── 0_model/                    # modeling reference (legacy)
+    └── 1_inputs/                   # legacy segmented inputs (legacy)
 ```
-
-Note: large files (Fe-Ni-Cr.data 24M, final.lmp 26M, eam.fs 4.4M) are not committed; generate or download them per SKILL.md.
 
 ## Dependencies
 
-- **Atomsk**: `atomsk` (Windows absolute path example `/d/atomsk_b0.13.1_Windows/Atomsk/atomsk`)
-- **LAMMPS** `lmp` / `lmp_mpi` + MPI (`mpirun`), with the `meam` / `manybody` packages enabled
-- **Python** + `numpy` (optional, only for the script); compatible with Git Bash / WSL / Linux
-- EAM/MEAM are real-space potentials — **no kspace/FFT needed**
+- **Atomsk**: `atomsk` (Windows example `/d/atomsk_b0.13.1_Windows/Atomsk/atomsk`) — for modeling.
+- **LAMMPS**: `lmp`/`lmp_mpi` + MPI (`mpirun`), with `meam`/`manybody` enabled — server-side run only.
+- **awk / Python**: only for CSV export; works on Git Bash / WSL / Linux.
+- EAM/MEAM are real-space potentials — **no kspace/FFT needed**.
 
 ## License
 
